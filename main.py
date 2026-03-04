@@ -30,6 +30,9 @@ if env_file.exists():
 from fastapi import FastAPI  # noqa: E402
 from fastapi.middleware.cors import CORSMiddleware  # noqa: E402
 from fastapi import Depends  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+from fastapi.responses import FileResponse  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
 
 from app.core.auth import verify_api_key  # noqa: E402
 from app.core.config import get_config  # noqa: E402
@@ -217,8 +220,22 @@ def create_app() -> FastAPI:
     )
     app.include_router(files_router, prefix="/v1/files")
 
-    # 静态文件服务
+    # Vercel 打包时可能会忽略名为 public 的目录。
+    # 这里为 /static/public/* 提供一个回退：优先读 app/static/public，缺失则读 app/static/_pub。
     static_dir = APP_DIR / "static"
+
+    @app.get("/static/public/{path:path}", include_in_schema=False)
+    async def static_public_fallback(path: str):
+        candidates = [
+            static_dir / "public" / path,
+            static_dir / "_pub" / path,
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return FileResponse(candidate)
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    # 静态文件服务
     if static_dir.exists():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
 

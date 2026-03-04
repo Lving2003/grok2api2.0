@@ -9,9 +9,34 @@ router = APIRouter()
 STATIC_DIR = Path(__file__).resolve().parents[2] / "static"
 
 
+def _resolve_static_path(*parts: str) -> Path | None:
+    candidates: list[Path] = []
+
+    base = Path(__file__).resolve()
+    candidates.append(STATIC_DIR.joinpath(*parts))
+
+    cwd = Path.cwd()
+    candidates.append(cwd.joinpath("app", "static", *parts))
+    candidates.append(cwd.joinpath("static", *parts))
+
+    for parent in base.parents[:8]:
+        candidates.append(parent.joinpath("static", *parts))
+        candidates.append(parent.joinpath("app", "static", *parts))
+
+    for candidate in candidates:
+        try:
+            if candidate.exists():
+                return candidate
+        except OSError:
+            continue
+    return None
+
+
 def _serve_public_page(filename: str) -> FileResponse:
-    path = STATIC_DIR / "public" / "pages" / filename
-    if not path.exists():
+    path = _resolve_static_path("public", "pages", filename)
+    if path is None:
+        path = _resolve_static_path("_pub", "pages", filename)
+    if path is None:
         raise HTTPException(status_code=404, detail="Not Found")
     return FileResponse(path)
 
@@ -76,17 +101,21 @@ async def public_imagine_workbench():
 async def public_manifest():
     if not is_public_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
-    return FileResponse(
-        STATIC_DIR / "public/manifest.webmanifest",
-        media_type="application/manifest+json",
-    )
+    path = _resolve_static_path("public", "manifest.webmanifest")
+    if path is None:
+        path = _resolve_static_path("_pub", "manifest.webmanifest")
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type="application/manifest+json")
 
 
 @router.get("/sw.js", include_in_schema=False)
 async def public_service_worker():
     if not is_public_enabled():
         raise HTTPException(status_code=404, detail="Not Found")
-    return FileResponse(
-        STATIC_DIR / "public/sw.js",
-        media_type="application/javascript",
-    )
+    path = _resolve_static_path("public", "sw.js")
+    if path is None:
+        path = _resolve_static_path("_pub", "sw.js")
+    if path is None:
+        raise HTTPException(status_code=404, detail="Not Found")
+    return FileResponse(path, media_type="application/javascript")

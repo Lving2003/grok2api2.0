@@ -5,17 +5,22 @@
   "routes": [
     {
       "src": "/(.*)",
-      "dest": "main.py"
+      "dest": "api/index.py"
     }
   ],
-  "functions": {
-    "main.py": {
-      "includeFiles": "app/static/**"
+  "builds": [
+    {
+      "src": "api/index.py",
+      "use": "@vercel/python",
+      "config": {
+        "includeFiles": "../app/static/**"
+      }
     }
-  },
+  ],
   "env": {
     "LOG_LEVEL": "INFO",
     "LOG_FILE_ENABLED": "false",
-    "DATA_DIR": "/tmp/data"
+    "DATA_DIR": "/tmp/data",
+    "SERVER_STORAGE_TYPE": "redis"
   }
 }

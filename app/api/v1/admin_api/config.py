@@ -1,6 +1,7 @@
 import os
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 
 from app.core.auth import verify_app_key
 from app.core.config import config
@@ -23,8 +24,9 @@ async def admin_verify():
 @router.get("/config", dependencies=[Depends(verify_app_key)])
 async def get_config():
     """获取当前配置"""
-    # 暴露原始配置字典
-    return config._config
+    # Refresh from storage to avoid stale snapshots across serverless instances.
+    await config.load()
+    return JSONResponse(config._config, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/config", dependencies=[Depends(verify_app_key)])
@@ -32,7 +34,10 @@ async def update_config(data: dict):
     """更新配置"""
     try:
         await config.update(data)
-        return {"status": "success", "message": "配置已更新"}
+        return JSONResponse(
+            {"status": "success", "message": "配置已更新", "config": config._config},
+            headers={"Cache-Control": "no-store"},
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

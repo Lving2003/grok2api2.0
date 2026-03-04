@@ -11,7 +11,7 @@ from app.core.config import get_config
 DEFAULT_API_KEY = ""
 DEFAULT_APP_KEY = "grok2api"
 DEFAULT_PUBLIC_KEY = ""
-DEFAULT_PUBLIC_ENABLED = False
+DEFAULT_PUBLIC_ENABLED = True
 
 # 定义 Bearer Scheme
 security = HTTPBearer(
@@ -90,6 +90,17 @@ async def verify_app_key(
 
     app_key 必须配置，否则拒绝登录。
     """
+    # Admin routes run on serverless instances (e.g. Vercel) where multiple
+    # concurrent instances may serve requests. Refresh config from storage to
+    # avoid reading a stale in-memory snapshot.
+    try:
+        from app.core.config import config as _config
+
+        await _config.load()
+    except Exception:
+        # Best-effort: fall back to in-memory config if storage is unavailable.
+        pass
+
     app_key = get_app_key()
 
     if not app_key:

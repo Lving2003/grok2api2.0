@@ -310,6 +310,7 @@ async function init() {
 async function loadData() {
   try {
     const res = await fetch('/v1/admin/config', {
+      cache: 'no-store',
       headers: buildAuthHeaders(apiKey)
     });
     if (res.ok) {
@@ -485,6 +486,7 @@ async function saveConfig() {
 
     const res = await fetch('/v1/admin/config', {
       method: 'POST',
+      cache: 'no-store',
       headers: {
         'Content-Type': 'application/json',
         ...buildAuthHeaders(apiKey)
@@ -493,6 +495,22 @@ async function saveConfig() {
     });
 
     if (res.ok) {
+      let payload = null;
+      try {
+        payload = await res.json();
+      } catch (e) {
+        payload = null;
+      }
+
+      if (payload && payload.config) {
+        currentConfig = payload.config;
+        renderConfig(currentConfig);
+      } else {
+        currentConfig = newConfig;
+        renderConfig(currentConfig);
+        loadData();
+      }
+
       btn.innerText = '成功';
       showToast('配置已保存', 'success');
       setTimeout(() => {
