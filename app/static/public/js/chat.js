@@ -728,16 +728,29 @@
     return parts;
   }
 
-  function parseRolloutBlocks(text) {
+  function parseRolloutBlocks(text, defaultId = 'General') {
     const lines = (text || '').split(/\r?\n/);
     const blocks = [];
     let current = null;
     for (const line of lines) {
-      const match = line.match(/^\s*\[([^\]]+)\]\[([^\]]+)\]\s*(.*)$/);
-      if (match) {
+      const matchDouble = line.match(/^\s*\[([^\]]+)\]\[([^\]]+)\]\s*(.*)$/);
+      if (matchDouble) {
         if (current) blocks.push(current);
-        current = { id: match[1], type: match[2], lines: [] };
-        if (match[3]) current.lines.push(match[3]);
+        current = { id: matchDouble[1], type: matchDouble[2], lines: [] };
+        if (matchDouble[3]) current.lines.push(matchDouble[3]);
+        continue;
+      }
+      const matchSingle = line.match(/^\s*\[([^\]]+)\]\s*(.*)$/);
+      if (matchSingle) {
+        const maybeType = String(matchSingle[1] || '').trim();
+        if (/^(WebSearch|SearchImage|AgentThink)$/i.test(maybeType)) {
+          if (current) blocks.push(current);
+          current = { id: defaultId || 'General', type: maybeType, lines: [] };
+          if (matchSingle[2]) current.lines.push(matchSingle[2]);
+          continue;
+        }
+      }
+      if (current && /^\s*\[[^\]]+\]\s*$/.test(line)) {
         continue;
       }
       if (current) {
@@ -779,6 +792,56 @@
     return sections;
   }
 
+  function splitBlocksIntoSyntheticAgents(blocks) {
+    const list = Array.isArray(blocks) ? blocks : [];
+    if (!list.length) return [];
+
+    const ids = Array.from(new Set(list.map((b) => String(b.id || '').trim()).filter(Boolean)));
+    const nonGeneralIds = ids.filter((id) => !/^general$/i.test(id));
+
+    // 优先按 rollout id 分组，能更稳定地映射多 agent。
+    if (nonGeneralIds.length >= 2) {
+      const groups = [];
+      const map = new Map();
+      for (const block of list) {
+        const key = String(block.id || 'General');
+        let group = map.get(key);
+        if (!group) {
+          group = { key, blocks: [] };
+          map.set(key, group);
+          groups.push(group);
+        }
+        group.blocks.push(block);
+      }
+      return groups.map((group, idx) => ({
+        title: idx === 0 ? 'Grok Leader' : `Agent ${idx}`,
+        blocks: group.blocks
+      }));
+    }
+
+    // 兜底：按 AgentThink 作为阶段收束点切分。
+    const sections = [];
+    let current = [];
+    for (const block of list) {
+      current.push(block);
+      if (/^agentthink$/i.test(String(block.type || '').trim())) {
+        sections.push(current);
+        current = [];
+      }
+    }
+    if (current.length) {
+      sections.push(current);
+    }
+
+    if (sections.length <= 1) {
+      return [{ title: 'Grok Leader', blocks: list }];
+    }
+    return sections.map((part, idx) => ({
+      title: idx === 0 ? 'Grok Leader' : `Agent ${idx}`,
+      blocks: part
+    }));
+  }
+
   function renderThinkContent(text, openAll) {
     const sections = parseAgentSections(text);
     if (!sections.length) {
@@ -812,7 +875,18 @@
     };
 
     const agentBlocks = sections.map((section, idx) => {
-      const blocks = parseRolloutBlocks(section.lines.join('\n'));
+      const blocks = parseRolloutBlocks(section.lines.join('\n'), section.title || 'General');
+      if (!section.title && blocks.length) {
+        const synthetic = splitBlocksIntoSyntheticAgents(blocks);
+        if (synthetic.length > 1) {
+          return synthetic.map((agent, agentIdx) => {
+            const inner = renderGroups(agent.blocks, openAll);
+            const title = escapeHtml(agent.title);
+            const openAttr = openAll ? ' open' : (idx === 0 && agentIdx === 0 ? ' open' : '');
+            return `<details class="think-agent"${openAttr}><summary>${title}</summary><div class="think-agent-items">${inner}</div></details>`;
+          }).join('');
+        }
+      }
       const inner = blocks.length
         ? renderGroups(blocks, openAll)
         : `<div class="think-rollout-body">${renderBasicMarkdown(section.lines.join('\n').trim())}</div>`;
