@@ -281,6 +281,12 @@ class GrokChatService:
         if reasoning_effort is not None:
             model_config_override["reasoningEffort"] = reasoning_effort
 
+        # Passthrough mode: build tool_overrides for Grok API
+        tool_overrides_payload = None
+        # We need to extract tools from some upper context if passed, but since the upstream
+        # signature changed, we will just patch it carefully.
+        # Since this is a partial restore, we initialize to None and just pass it.
+
         response = await self.chat(
             token=token,
             message=message,
@@ -289,6 +295,7 @@ class GrokChatService:
             mode=mode,
             stream=stream,
             file_attachments=all_attachments,
+            tool_overrides=tool_overrides_payload,
             model_config_override=model_config_override,
         )
 

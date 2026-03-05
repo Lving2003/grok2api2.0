@@ -159,9 +159,9 @@ class AppChatReverse:
 
             # Curl Config
             base_timeout = max(
-                float(get_config("chat.timeout") or 0),
-                float(get_config("video.timeout") or 0),
-                float(get_config("image.timeout") or 0),
+                float(get_config("chat.timeout") or 60.0),
+                float(get_config("video.timeout") or 60.0),
+                float(get_config("image.timeout") or 60.0),
             )
             connect_timeout = float(
                 get_config("chat.connect_timeout")
@@ -203,6 +203,8 @@ class AppChatReverse:
                         f"AppChatReverse: Chat failed, {response.status_code}",
                         extra={"error_type": "UpstreamException"},
                     )
+                    logger.error(f"Response Headers: {response.headers}")
+                    logger.error(f"Response Body: {content}")
                     raise UpstreamException(
                         message=f"AppChatReverse: Chat failed, {response.status_code}",
                         details={"status": response.status_code, "body": content},
