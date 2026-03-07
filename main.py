@@ -10,11 +10,8 @@ import os
 import platform
 import sys
 from pathlib import Path
-from typing import Dict, List
-import asyncio
 
 from dotenv import load_dotenv
-import httpx
 
 BASE_DIR = Path(__file__).resolve().parent
 APP_DIR = BASE_DIR / "app"
@@ -48,6 +45,7 @@ from app.api.v1.response import router as responses_router  # noqa: E402
 from app.services.token import get_scheduler  # noqa: E402
 from app.api.v1.admin_api import router as admin_router
 from app.api.v1.public_api import router as public_router
+from app.api.v1.video_api import router as video_router
 from app.api.pages import router as pages_router
 from fastapi.staticfiles import StaticFiles
 
@@ -55,82 +53,6 @@ from fastapi.staticfiles import StaticFiles
 setup_logging(
     level=os.getenv("LOG_LEVEL", "INFO"), json_console=False, file_logging=True
 )
-
-
-FFMPEG_VENDOR_DIR = APP_DIR / "static" / "vendor" / "ffmpeg"
-FFMPEG_VENDOR_ASSETS: Dict[str, List[str]] = {
-    "ffmpeg.js": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js",
-        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js",
-    ],
-    "814.ffmpeg.js": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js",
-        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js",
-    ],
-    "ffmpeg.js.map": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js.map",
-        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js.map",
-    ],
-    "814.ffmpeg.js.map": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js.map",
-        "https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js.map",
-    ],
-    "ffmpeg-util.js": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js",
-        "https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js",
-    ],
-    "ffmpeg-core.js": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
-        "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.js",
-    ],
-    "ffmpeg-core.wasm": [
-        "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm",
-        "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd/ffmpeg-core.wasm",
-    ],
-}
-
-
-async def _download_first_success(
-    client: httpx.AsyncClient, filename: str, urls: List[str], target_path: Path
-) -> bool:
-    for url in urls:
-        try:
-            resp = await client.get(url, follow_redirects=True)
-            if resp.status_code == 200 and resp.content:
-                target_path.write_bytes(resp.content)
-                logger.info(
-                    f"FFmpeg vendor downloaded: {filename} <- {url} ({len(resp.content)} bytes)"
-                )
-                return True
-            logger.warning(
-                f"FFmpeg vendor candidate failed: {filename} <- {url} status={resp.status_code}"
-            )
-        except Exception as e:
-            logger.warning(f"FFmpeg vendor download error: {filename} <- {url}, error={e}")
-    return False
-
-
-async def ensure_ffmpeg_vendor_assets() -> None:
-    """启动时预热 ffmpeg 前端依赖到本地静态目录，避免浏览器跨域/CORS 问题。"""
-    FFMPEG_VENDOR_DIR.mkdir(parents=True, exist_ok=True)
-    timeout = httpx.Timeout(connect=8.0, read=30.0, write=30.0, pool=8.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        tasks = []
-        pending_names: list[str] = []
-        for filename, urls in FFMPEG_VENDOR_ASSETS.items():
-            target = FFMPEG_VENDOR_DIR / filename
-            if target.exists() and target.stat().st_size > 0:
-                logger.info(f"FFmpeg vendor exists: {filename}")
-                continue
-            pending_names.append(filename)
-            tasks.append(_download_first_success(client, filename, urls, target))
-
-        if not tasks:
-            return
-        results = await asyncio.gather(*tasks, return_exceptions=False)
-        failed = [name for name, ok in zip(pending_names, results) if not ok]
-        if failed:
-            logger.warning(f"FFmpeg vendor partial ready, failed={failed}")
 
 
 @asynccontextmanager
@@ -149,7 +71,6 @@ async def lifespan(app: FastAPI):
     logger.info("Starting Grok2API...")
     logger.info(f"Platform: {platform.system()} {platform.release()}")
     logger.info(f"Python: {sys.version.split()[0]}")
-    await ensure_ffmpeg_vendor_assets()
 
     # 4. 启动 Token 刷新调度器
     refresh_enabled = get_config("token.auto_refresh", True)
@@ -160,11 +81,30 @@ async def lifespan(app: FastAPI):
         scheduler = get_scheduler(interval)
         scheduler.start()
 
+    # 5. 启动 cf_clearance 自动刷新
+    #    环境变量 FLARESOLVERR_URL 会作为初始值写入配置（兼容旧部署方式）
+    _flaresolverr_env = os.getenv("FLARESOLVERR_URL", "")
+    if _flaresolverr_env and not get_config("proxy.flaresolverr_url"):
+        await config.update({
+            "proxy": {
+                "enabled": True,
+                "flaresolverr_url": _flaresolverr_env,
+                "refresh_interval": int(os.getenv("CF_REFRESH_INTERVAL", "600")),
+                "timeout": int(os.getenv("CF_TIMEOUT", "60")),
+            }
+        })
+
+    from app.services.cf_refresh import start as cf_refresh_start
+    cf_refresh_start()
+
     logger.info("Application startup complete.")
     yield
 
     # 关闭
     logger.info("Shutting down Grok2API...")
+
+    from app.services.cf_refresh import stop as cf_refresh_stop
+    cf_refresh_stop()
 
     from app.core.storage import StorageFactory
 
@@ -218,6 +158,9 @@ def create_app() -> FastAPI:
     app.include_router(
         responses_router, dependencies=[Depends(verify_api_key)]
     )
+    app.include_router(
+        video_router, prefix="/v1", dependencies=[Depends(verify_api_key)]
+    )
     app.include_router(files_router, prefix="/v1/files")
 
     # Vercel 打包时可能会忽略名为 public 的目录。
@@ -251,8 +194,11 @@ app = create_app()
 
 
 if __name__ == "__main__":
-    import uvicorn
-
+    print("推荐使用 Granian 命令行启动服务，例如：")
+    print("granian --interface asgi --host 0.0.0.0 --port 8000 main:app")
+    print("\n或者使用内置脚本：python scripts/run.py")
+    
+    import argparse
     parser = argparse.ArgumentParser(description="启动 Grok2API 服务")
     parser.add_argument(
         "--host",

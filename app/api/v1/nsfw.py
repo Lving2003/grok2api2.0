@@ -432,16 +432,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                             resolution=effective_resolution,
                             preset=task_preset,
                         )
-                        raw_video_response = await VideoCollectProcessor(
+                        processor = VideoCollectProcessor(
                             "grok-imagine-1.0-video",
                             task_token,
                             upscale_on_finish=data.upscale,
-                        ).process(response_stream)
+                        )
+                        raw_video_response = await processor.process(response_stream)
                         video_content = (
                             raw_video_response.get("choices", [{}])[0]
                             .get("message", {})
                             .get("content", "")
                         )
+                        # [NEW] 优先从返回结果或处理器中提取 post_id
+                        task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", parent_post_id)
+                        
                         video_url, poster_url = _extract_video_urls(video_content)
                         if video_url:
                             break
@@ -464,16 +468,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                         resolution=effective_resolution,
                         preset=task_preset,
                     )
-                    raw_video_response = await VideoCollectProcessor(
+                    processor = VideoCollectProcessor(
                         "grok-imagine-1.0-video",
                         task_token,
                         upscale_on_finish=data.upscale,
-                    ).process(response_stream)
+                    )
+                    raw_video_response = await processor.process(response_stream)
                     video_content = (
                         raw_video_response.get("choices", [{}])[0]
                         .get("message", {})
                         .get("content", "")
                     )
+                    # [NEW] 提取 post_id
+                    task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", "")
+
                     video_url, poster_url = _extract_video_urls(video_content)
 
                 # parentPostId 路径无产出时，自动降级到上传图片路径重试一次
@@ -494,16 +502,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                             resolution_name=effective_resolution,
                             preset=task_preset,
                         )
-                        raw_video_response = await VideoCollectProcessor(
+                        processor = VideoCollectProcessor(
                             "grok-imagine-1.0-video",
                             task_token,
                             upscale_on_finish=data.upscale,
-                        ).process(response_stream)
+                        )
+                        raw_video_response = await processor.process(response_stream)
                         video_content = (
                             raw_video_response.get("choices", [{}])[0]
                             .get("message", {})
                             .get("content", "")
                         )
+                        # [NEW] 提取 post_id
+                        task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", task_post_id)
+
                         video_url, poster_url = _extract_video_urls(video_content)
 
                     if data.parent_post_only:
@@ -526,16 +538,20 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                                 resolution=effective_resolution,
                                 preset=task_preset,
                             )
-                            raw_video_response = await VideoCollectProcessor(
+                            processor = VideoCollectProcessor(
                                 "grok-imagine-1.0-video",
                                 task_token,
                                 upscale_on_finish=data.upscale,
-                            ).process(response_stream)
+                            )
+                            raw_video_response = await processor.process(response_stream)
                             video_content = (
                                 raw_video_response.get("choices", [{}])[0]
                                 .get("message", {})
                                 .get("content", "")
                             )
+                            # [NEW] 提取 post_id
+                            task_post_id = raw_video_response.get("post_id") or getattr(processor, "video_post_id", task_post_id)
+
                             video_url, poster_url = _extract_video_urls(video_content)
                 if used_parent_post and data.parent_post_only and not video_url:
                     return {
@@ -546,7 +562,6 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                         "url": "",
                         "poster_url": "",
                         "content": video_content,
-                        "raw_response": raw_video_response,
                     }
                 return {
                     "index": index,
@@ -554,11 +569,12 @@ async def _generate_nsfw_inner(data: NSFWRequest) -> Dict[str, Any]:
                     "content": video_content,
                     "url": _clean_url(video_url),
                     "poster_url": _clean_url(poster_url),
-                    "raw_response": raw_video_response,
                     "parent_post_id": parent_post_id,
                 }
             except Exception as e:
                 logger.warning(f"NSFW video failed: {task_tag}, error={e}")
+                # 从 processor 中尝试挽救 post_id (内部记录用，不再返回)
+                rescue_post_id = getattr(locals().get("processor"), "video_post_id", "") or task_post_id
                 return {
                     "index": index,
                     "image_url": image_url,
