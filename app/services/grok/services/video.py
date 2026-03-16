@@ -91,6 +91,76 @@ def _classify_video_error(exc: Exception) -> tuple[str, str, int]:
     return ("视频生成失败，请稍后重试", "video_failed", 502)
 
 
+async def _resolve_video_asset_path(asset_id: str, token: str) -> tuple[str, str]:
+    """Resolve cached video asset paths when upstream omits the final video URL."""
+    if not asset_id or not token:
+        return "", ""
+
+    retries = 3
+    delay = 1.5
+    page_size = 50
+    max_pages = 20
+    marker = f"/{asset_id}/"
+
+    async with AsyncSession() as session:
+        for attempt in range(1, retries + 1):
+            params = {
+                "pageSize": page_size,
+                "orderBy": "ORDER_BY_LAST_USE_TIME",
+                "source": "SOURCE_ANY",
+                "isLatest": "true",
+            }
+            page_token = ""
+            page_count = 0
+            try:
+                while True:
+                    if page_token:
+                        params["pageToken"] = page_token
+                    else:
+                        params.pop("pageToken", None)
+
+                    response = await AssetsListReverse.request(session, token, params)
+                    data = response.json() if response is not None else {}
+                    assets = data.get("assets", []) if isinstance(data, dict) else []
+
+                    for asset in assets:
+                        if not isinstance(asset, dict):
+                            continue
+                        current_asset_id = str(asset.get("assetId", "")).strip()
+                        key = str(asset.get("key", "")).strip()
+                        mime_type = str(asset.get("mimeType", "")).lower()
+                        if (
+                            current_asset_id == asset_id
+                            or marker in key
+                            or key.endswith(f"{asset_id}/content")
+                        ):
+                            if mime_type.startswith("video/") or "generated_video" in key:
+                                preview_key = str(asset.get("previewImageKey", "")).strip()
+                                if not preview_key:
+                                    aux = asset.get("auxKeys") or {}
+                                    if isinstance(aux, dict):
+                                        preview_key = str(aux.get("preview-image", "")).strip()
+                                logger.info(
+                                    "Video asset resolved by assets list: "
+                                    f"asset_id={asset_id}, key={key}, preview={preview_key}"
+                                )
+                                return key, preview_key
+
+                    page_token = str(data.get("nextPageToken", "")).strip()
+                    page_count += 1
+                    if not page_token or page_count >= max_pages:
+                        break
+            except Exception as e:
+                logger.warning(
+                    f"Video asset resolve failed (attempt={attempt}/{retries}): {e}"
+                )
+
+            if attempt < retries:
+                await asyncio.sleep(delay)
+
+    return "", ""
+
+
 class VideoService:
     """Video generation service."""
 
@@ -1019,6 +1089,9 @@ class VideoStreamProcessor(BaseProcessor):
     ) -> AsyncGenerator[str, None]:
         """Process video stream response."""
         idle_timeout = get_config("video.stream_timeout")
+        fallback_video_id = ""
+        fallback_thumb = ""
+        rendered_video = False
 
         try:
             async for line in _with_idle_timeout(response, idle_timeout, self.model):
@@ -1055,6 +1128,17 @@ class VideoStreamProcessor(BaseProcessor):
                     continue
 
                 if video_resp := resp.get("streamingVideoGenerationResponse"):
+                    fallback_video_id = (
+                        str(video_resp.get("videoPostId", "")).strip()
+                        or str(video_resp.get("assetId", "")).strip()
+                        or str(video_resp.get("videoId", "")).strip()
+                        or fallback_video_id
+                    )
+                    thumb_from_stream = str(
+                        video_resp.get("thumbnailImageUrl", "")
+                    ).strip()
+                    if thumb_from_stream:
+                        fallback_thumb = thumb_from_stream
                     progress = video_resp.get("progress", 0)
 
                     if is_thinking:
@@ -1094,9 +1178,51 @@ class VideoStreamProcessor(BaseProcessor):
                                 video_url, self.token, thumbnail_url
                             )
                             yield self._sse(rendered)
+                            rendered_video = True
 
                             logger.info(f"Video generated: {video_url} (post_id={video_post_id})")
                     continue
+
+                if model_resp := resp.get("modelResponse"):
+                    file_attachments = model_resp.get("fileAttachments", [])
+                    if isinstance(file_attachments, list):
+                        for fid in file_attachments:
+                            fid = str(fid).strip()
+                            if fid:
+                                fallback_video_id = fid
+                                break
+
+            if not rendered_video and fallback_video_id:
+                asset_video_path, asset_thumb_path = await _resolve_video_asset_path(
+                    fallback_video_id, self.token
+                )
+                if asset_video_path:
+                    if self.token:
+                        from app.services.grok.utils.asset_token_map import AssetTokenMap
+
+                        token_map = await AssetTokenMap.get_instance()
+                        await token_map.save_mapping(fallback_video_id, self.token)
+                    if self.upscale_on_finish:
+                        yield self._sse("姝ｅ湪瀵硅棰戣繘琛岃秴鍒嗚鲸鐜嘰n")
+                        asset_video_path = await self._upscale_video_url(asset_video_path)
+                    dl_service = self._get_dl()
+                    rendered = await dl_service.render_video(
+                        asset_video_path, self.token, asset_thumb_path or fallback_thumb
+                    )
+                    yield self._sse(rendered)
+                    rendered_video = True
+                    logger.info(
+                        "Video generated via assets fallback: "
+                        f"video_id={fallback_video_id}, key={asset_video_path}"
+                    )
+
+            if not rendered_video:
+                raise AppException(
+                    message="瑙嗛鐢熸垚澶辫触锛氭湭杩斿洖鍙敤瑙嗛缁撴灉锛岃绋嶅悗閲嶈瘯",
+                    error_type=ErrorType.SERVER.value,
+                    code="video_empty_result",
+                    status_code=502,
+                )
 
             if self.think_opened:
                 yield self._sse("</think>\n")

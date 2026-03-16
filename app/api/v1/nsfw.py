@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from app.core.config import get_config
 from app.core.exceptions import AppException, ErrorType, ValidationException
 from app.core.logger import logger
+from app.core.url_utils import build_public_file_url
 from app.services.grok.services.image import ImageGenerationService
 from app.services.grok.services.model import ModelService
 from app.services.grok.services.video import VideoService, VideoCollectProcessor
@@ -146,14 +147,11 @@ def _resolve_ratio(data: NSFWRequest) -> str:
 
 
 def _normalize_image_url(url: str) -> str:
-    app_url = (get_config("app.app_url") or "").strip().rstrip("/")
     if url.startswith("http://") or url.startswith("https://"):
         return url
     if not url.startswith("/"):
         url = f"/{url}"
-    if app_url:
-        return f"{app_url}{url}"
-    return url
+    return build_public_file_url(url)
 
 
 def _extract_video_urls(content: str) -> tuple[str, str]:

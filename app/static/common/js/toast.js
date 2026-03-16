@@ -95,16 +95,12 @@ function showToast(message, type = 'success') {
     backdrop.appendChild(dialog);
     document.body.appendChild(backdrop);
 
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
     confirmBtn.addEventListener('click', () => {
       try {
         localStorage.setItem(noticeKey, '1');
       } catch (e) {
         // ignore
       }
-      document.body.style.overflow = prevOverflow;
       backdrop.remove();
     });
   };

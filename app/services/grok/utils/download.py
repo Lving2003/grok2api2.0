@@ -18,6 +18,7 @@ from curl_cffi.requests import AsyncSession
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
 from app.core.config import get_config
+from app.core.url_utils import build_public_file_url
 from app.core.exceptions import AppException
 from app.services.reverse.assets_download import AssetsDownloadReverse
 from app.services.grok.utils.locks import _get_download_semaphore, _file_lock
@@ -50,23 +51,26 @@ class DownloadService:
     async def resolve_url(
         self, path_or_url: str, token: str, media_type: str = "image"
     ) -> str:
+        if not isinstance(path_or_url, str) or not path_or_url.strip():
+            return ""
         asset_url = path_or_url
         path = path_or_url
         if path_or_url.startswith("http"):
             parsed = urlparse(path_or_url)
             path = parsed.path or ""
+            if path.startswith("/v1/files/"):
+                return build_public_file_url(path)
             asset_url = path_or_url
         else:
             if not path_or_url.startswith("/"):
                 path_or_url = f"/{path_or_url}"
             path = path_or_url
+            if path.startswith("/v1/files/"):
+                return build_public_file_url(path)
             asset_url = f"https://assets.grok.com{path_or_url}"
 
-        app_url = get_config("app.app_url")
-        if app_url:
-            await self.download_file(asset_url, token, media_type)
-            return f"{app_url.rstrip('/')}/v1/files/{media_type}{path}"
-        return asset_url
+        await self.download_file(asset_url, token, media_type)
+        return build_public_file_url(f"/v1/files/{media_type}{path}")
 
     async def render_image(
         self, url: str, token: str, image_id: str = "image"

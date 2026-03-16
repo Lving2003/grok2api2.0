@@ -15,6 +15,7 @@ import orjson
 from app.core.config import get_config
 from app.core.logger import logger
 from app.core.storage import DATA_DIR
+from app.core.url_utils import build_public_file_url
 from app.core.exceptions import AppException, ErrorType, UpstreamException
 from app.services.grok.utils.process import BaseProcessor
 from app.services.grok.utils.retry import pick_token, rate_limited
@@ -388,10 +389,7 @@ class ImageWSBaseProcessor(BaseProcessor):
         return f"{image_id}.{ext}"
 
     def _build_file_url(self, filename: str) -> str:
-        app_url = get_config("app.app_url")
-        if app_url:
-            return f"{app_url.rstrip('/')}/v1/files/image/{filename}"
-        return f"/v1/files/image/{filename}"
+        return build_public_file_url(f"/v1/files/image/{filename}")
 
     async def _save_blob(
         self, image_id: str, blob: str, is_final: bool, ext: Optional[str] = None
