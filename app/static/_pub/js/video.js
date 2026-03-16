@@ -302,6 +302,20 @@
     return all && all.length ? all[all.length - 1] : '';
   }
 
+  function canApplyParentPostReference(text) {
+    const raw = String(text || '').trim();
+    if (!raw) return false;
+    if (extractParentPostId(raw)) return true;
+    const api = getParentMemoryApi();
+    if (!api || typeof api.resolveByText !== 'function') return false;
+    try {
+      const hit = api.resolveByText(raw);
+      return Boolean(hit && (hit.parentPostId || hit.id));
+    } catch (e) {
+      return false;
+    }
+  }
+
   function normalizeHttpSourceUrl(value) {
     const raw = String(value || '').trim();
     if (!raw) return '';
@@ -2228,7 +2242,12 @@
 
   if (applyParentBtn) {
     applyParentBtn.addEventListener('click', () => {
-      applyParentPostReference(parentPostInput ? parentPostInput.value : '');
+      const raw = parentPostInput ? parentPostInput.value : '';
+      if (!canApplyParentPostReference(raw)) {
+        toast('未识别到有效 parentPostId', 'warning');
+        return;
+      }
+      applyParentPostReference(raw);
     });
   }
 
@@ -2236,12 +2255,28 @@
     parentPostInput.addEventListener('keydown', (event) => {
       if (event.key === 'Enter') {
         event.preventDefault();
+        if (!canApplyParentPostReference(parentPostInput.value)) {
+          toast('未识别到有效 parentPostId', 'warning');
+          return;
+        }
         applyParentPostReference(parentPostInput.value);
       }
     });
     parentPostInput.addEventListener('input', () => {
       const raw = parentPostInput.value.trim();
       if (!raw) {
+        if (imageUrlInput) {
+          imageUrlInput.value = '';
+        }
+        if (!fileDataUrl) {
+          clearReferencePreview();
+        }
+        return;
+      }
+      if (!canApplyParentPostReference(raw)) {
+        if (imageUrlInput) {
+          imageUrlInput.value = '';
+        }
         if (!fileDataUrl) {
           clearReferencePreview();
         }
@@ -2254,6 +2289,15 @@
       if (!text) return;
       event.preventDefault();
       parentPostInput.value = text;
+      if (!canApplyParentPostReference(text)) {
+        if (imageUrlInput) {
+          imageUrlInput.value = '';
+        }
+        if (!fileDataUrl) {
+          clearReferencePreview();
+        }
+        return;
+      }
       applyParentPostReference(text, { silent: true });
     });
   }
@@ -2271,7 +2315,7 @@
         return;
       }
       const hasUrlLikePrefix = raw.startsWith('http://') || raw.startsWith('https://') || raw.startsWith('data:image/') || raw.startsWith('/');
-      if (!hasUrlLikePrefix) {
+      if (!hasUrlLikePrefix && canApplyParentPostReference(raw)) {
         const applied = applyParentPostReference(raw, { silent: true });
         if (applied) {
           return;
@@ -2293,7 +2337,9 @@
       if (!text) return;
       event.preventDefault();
       imageUrlInput.value = text;
-      const applied = applyParentPostReference(text, { silent: true });
+      const applied = canApplyParentPostReference(text)
+        ? applyParentPostReference(text, { silent: true })
+        : false;
       if (!applied) {
         const resolved = resolveReferenceByText(text);
         if (resolved.parentPostId && parentPostInput) {
