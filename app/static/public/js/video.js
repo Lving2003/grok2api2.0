@@ -305,12 +305,20 @@
   function canApplyParentPostReference(text) {
     const raw = String(text || '').trim();
     if (!raw) return false;
-    if (extractParentPostId(raw)) return true;
+    const strictPatterns = [
+      /^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/,
+      /[?&#](?:parent_post_id|parentPostId|post_id|postId)=((?:[0-9a-fA-F]{32})|(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))(?:[&#]|$)/i,
+      /\/generated\/((?:[0-9a-fA-F]{32})|(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))(?:\/|$)/,
+      /\/imagine-public\/images\/((?:[0-9a-fA-F]{32})|(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))(?:\.[A-Za-z0-9]+|\/|$)/,
+      /\/images\/((?:[0-9a-fA-F]{32})|(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}))(?:\.[A-Za-z0-9]+|\/|$)/,
+    ];
+    if (strictPatterns.some((pattern) => pattern.test(raw))) return true;
     const api = getParentMemoryApi();
     if (!api || typeof api.resolveByText !== 'function') return false;
     try {
       const hit = api.resolveByText(raw);
-      return Boolean(hit && (hit.parentPostId || hit.id));
+      const id = String(hit && (hit.parentPostId || hit.id) || '').trim();
+      return /^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$/.test(id);
     } catch (e) {
       return false;
     }
